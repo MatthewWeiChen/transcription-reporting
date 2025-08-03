@@ -1,0 +1,88 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: voice-transcription-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: voice_transcription
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./apps/api/prisma/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - voice-app-network
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: voice-transcription-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - voice-app-network
+
+  # NestJS API Backend
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: voice-transcription-api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/voice_transcription
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=your-super-secret-jwt-key
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_SHEETS_API_KEY=${GOOGLE_SHEETS_API_KEY}
+    ports:
+      - "3001:3001"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+      - ./apps/api/uploads:/app/uploads
+    networks:
+      - voice-app-network
+
+  # Next.js Frontend
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: voice-transcription-web
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+      - NEXTAUTH_SECRET=your-nextauth-secret
+      - NEXTAUTH_URL=http://localhost:3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - voice-app-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  voice-app-network:
+    driver: bridge

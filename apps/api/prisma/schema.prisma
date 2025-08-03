@@ -1,0 +1,206 @@
+// apps/api/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Meeting Records - Core table for voice recordings
+model MeetingRecord {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // DATE IS THE MOST IMPORTANT FIELD - Primary business key
+  recordingDate     DateTime @db.Date // YYYY-MM-DD - Most important for queries
+  recordingDateTime DateTime // Full timestamp with time
+
+  // Extracted information from voice message (required format)
+  speakerName String @db.VarChar(255)
+  groupNumber String @db.VarChar(50) // Can be alphanumeric
+  personMet   String @db.VarChar(255)
+  location    String @db.VarChar(500)
+
+  // Audio and transcription data
+  fullTranscription String  @db.Text
+  audioFileUrl      String? @db.VarChar(1000) // S3/cloud storage URL
+  recordingDuration String  @db.VarChar(10) // Format: MM:SS
+
+  // Date components for efficient querying
+  year      Int
+  month     Int
+  day       Int
+  dayOfWeek String @db.VarChar(20)
+
+  // Metadata
+  status           RecordingStatus  @default(SUBMITTED)
+  validationScore  Float?           @default(1.0) // Quality of transcription
+  processingStatus ProcessingStatus @default(PENDING)
+
+  // External integrations
+  googleSheetsRowId String?   @db.VarChar(100)
+  syncedToSheets    Boolean   @default(false)
+  sheetsLastSync    DateTime?
+
+  // Audit fields
+  ipAddress   String? @db.VarChar(45)
+  userAgent   String? @db.VarChar(1000)
+  submittedBy String? @db.VarChar(255) // If we add auth later
+
+  // Relations
+  group Group? @relation(fields: [groupNumber], references: [number])
+
+  // Indexes for performance (date is most important)
+  @@index([recordingDate])
+  @@index([groupNumber, recordingDate])
+  @@index([recordingDateTime])
+  @@index([speakerName])
+  @@index([status])
+  @@index([year, month, day])
+  @@map("meeting_records")
+}
+
+// Groups table for managing group information
+model Group {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  number      String  @unique @db.VarChar(50)
+  name        String? @db.VarChar(255)
+  description String? @db.Text
+  isActive    Boolean @default(true)
+
+  // Settings
+  requiredFields    Json? // Custom validation rules
+  notificationEmail String? @db.VarChar(255)
+
+  // Relations
+  meetings MeetingRecord[]
+
+  @@map("groups")
+}
+
+// Transcription jobs for async processing
+model TranscriptionJob {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meetingRecordId String    @unique
+  audioFileUrl    String    @db.VarChar(1000)
+  status          JobStatus @default(QUEUED)
+  provider        String    @db.VarChar(50) // 'openai', 'google', 'azure'
+
+  // Results
+  transcriptionText String? @db.Text
+  confidence        Float?  @default(0.0)
+  processingTime    Int? // milliseconds
+
+  // Error handling
+  errorMessage String? @db.Text
+  retryCount   Int     @default(0)
+  maxRetries   Int     @default(3)
+
+  // Costs tracking
+  tokensUsed Int?
+  costUsd    Decimal? @db.Decimal(10, 4)
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([provider])
+  @@map("transcription_jobs")
+}
+
+// Integration logs for tracking external API calls
+model IntegrationLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  meetingRecordId String?
+  service         String            @db.VarChar(50) // 'google_sheets', 'database', 'transcription'
+  action          String            @db.VarChar(100)
+  status          IntegrationStatus @default(PENDING)
+
+  // Request/Response data
+  requestData  Json?
+  responseData Json?
+  errorMessage String? @db.Text
+
+  // Performance metrics
+  durationMs Int?
+
+  @@index([service, status])
+  @@index([createdAt])
+  @@index([meetingRecordId])
+  @@map("integration_logs")
+}
+
+// System configuration
+model SystemConfig {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key         String  @unique @db.VarChar(100)
+  value       String  @db.Text
+  description String? @db.Text
+  isActive    Boolean @default(true)
+
+  @@map("system_config")
+}
+
+// Analytics for insights
+model DailyStats {
+  id   String   @id @default(cuid())
+  date DateTime @unique @db.Date
+
+  totalRecordings      Int   @default(0)
+  successfulRecordings Int   @default(0)
+  failedRecordings     Int   @default(0)
+  uniqueGroups         Int   @default(0)
+  uniqueSpeakers       Int   @default(0)
+  averageDuration      Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+  @@map("daily_stats")
+}
+
+// Enums
+enum RecordingStatus {
+  SUBMITTED
+  VALIDATED
+  PROCESSED
+  FAILED
+  ARCHIVED
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  RETRYING
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum IntegrationStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}
